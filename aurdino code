@@ -1,0 +1,84 @@
+#include <Adafruit_NeoPixel.h>
+
+// Pin definitions
+#define LED_PIN     3     // NeoPixel data pin
+#define NUM_LEDS    24    // Number of LEDs
+#define BRIGHTNESS  50    // Brightness level (0–255)
+#define FADE_STEPS  50    // Number of steps in the fade
+#define FADE_DELAY  20    // Delay between fade steps (ms)
+
+// Initialize NeoPixel ring
+Adafruit_NeoPixel ring(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
+
+// Color sequence timing (in milliseconds)
+const unsigned long sequence[] = {
+  1600,  4000, 26000, 4000, 3200, 4000, 26700, 4000,
+  8900,  4000, 6100,  4000, 8400, 4000, 6000
+};
+
+unsigned long lastChangeTime = 0;
+int sequenceIndex = 0;
+bool isYellow = false;
+
+void setup() {
+  Serial.begin(9600);
+  ring.begin();
+  ring.setBrightness(BRIGHTNESS);
+  ring.show();
+
+  // Flash red 10 times before starting
+  for (int i = 0; i < 10; i++) {
+    ring.fill(ring.Color(255, 0, 0)); // Red
+    ring.show();
+    delay(500);
+    ring.clear();
+    ring.show();
+    delay(500);
+  }
+
+  // Start with blue
+  ring.fill(ring.Color(0, 0, 255));
+  ring.show();
+  lastChangeTime = millis();
+}
+
+void loop() {
+  unsigned long currentTime = millis();
+
+  if (sequenceIndex < sizeof(sequence) / sizeof(sequence[0])) {
+    if (currentTime - lastChangeTime >= sequence[sequenceIndex]) {
+      isYellow = !isYellow;
+
+      uint32_t startColor = isYellow ? ring.Color(0, 0, 255) : ring.Color(255, 255, 0);
+      uint32_t endColor   = isYellow ? ring.Color(255, 255, 0) : ring.Color(0, 0, 255);
+      fadeToColor(startColor, endColor, FADE_STEPS, FADE_DELAY);
+
+      lastChangeTime = currentTime;
+      sequenceIndex++;
+
+      Serial.print("Faded to: ");
+      Serial.println(isYellow ? "Yellow" : "Blue");
+    }
+  }
+}
+
+// Function to fade from one color to another
+void fadeToColor(uint32_t start, uint32_t end, int steps, int delayTime) {
+  uint8_t sr = (start >> 16) & 0xFF;
+  uint8_t sg = (start >> 8) & 0xFF;
+  uint8_t sb = start & 0xFF;
+
+  uint8_t er = (end >> 16) & 0xFF;
+  uint8_t eg = (end >> 8) & 0xFF;
+  uint8_t eb = end & 0xFF;
+
+  for (int step = 0; step <= steps; step++) {
+    uint8_t r = sr + ((er - sr) * step / steps);
+    uint8_t g = sg + ((eg - sg) * step / steps);
+    uint8_t b = sb + ((eb - sb) * step / steps);
+
+    ring.fill(ring.Color(r, g, b));
+    ring.show();
+    delay(delayTime);
+  }
+}
