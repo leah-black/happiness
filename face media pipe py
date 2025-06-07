@@ -1,0 +1,152 @@
+import cv2
+import numpy as np
+import pandas as pd
+import time
+from datetime import datetime
+import mediapipe as mp
+import os
+from collections import defaultdict
+import glob
+
+def get_next_file_number(output_dir, prefix):
+    """Get the next available file number for the given prefix"""
+    # Get all existing files with the prefix
+    pattern = os.path.join(output_dir, f'{prefix}_*')
+    existing_files = glob.glob(pattern)
+    
+    # Extract numbers from filenames
+    numbers = []
+    for file in existing_files:
+        try:
+            # Extract number from filename (e.g., 'finshd_video_001' -> 1)
+            num = int(os.path.basename(file).split('_')[-1].split('.')[0])
+            numbers.append(num)
+        except (ValueError, IndexError):
+            continue
+    
+    # Return next number (1 if no files exist)
+    return max(numbers) + 1 if numbers else 1
+
+def get_happiness_color(score):
+    """Convert happiness score to color (BGR format)"""
+    if score > 0:
+        return (0, 255, 255)  # Yellow in BGR
+    return (255, 0, 0)  # Blue in BGR
+
+def add_overlay(frame, score, timestamp, tree_count, ages):
+    """Add overlays to frame"""
+    # Get frame dimensions
+    height, width = frame.shape[:2]
+    
+    # Create text lines for bottom right
+    timestamp_text = f"Time: {timestamp}"
+    score_text = f"Happiness: {score:.2f}"
+    
+    # Get text size for bottom right
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    time_font_scale = 0.7
+    score_font_scale = 1.2
+    thickness = 2
+    line_spacing = 10
+    
+    # Calculate text sizes for bottom right
+    (time_width, time_height), _ = cv2.getTextSize(timestamp_text, font, time_font_scale, thickness)
+    (score_width, score_height), _ = cv2.getTextSize(score_text, font, score_font_scale, thickness)
+    
+    # Find the widest text for bottom right
+    max_width = max(time_width, score_width)
+    
+    # Calculate position for bottom right
+    padding = 20
+    x_right = width - max_width - padding
+    y_right = height - padding
+    
+    # Calculate total height needed for bottom right
+    total_height = time_height + score_height + line_spacing
+    
+    # Add semi-transparent background for bottom right
+    overlay = frame.copy()
+    cv2.rectangle(overlay, 
+                 (x_right - 10, y_right - total_height - 10),
+                 (x_right + max_width + 10, y_right + 10),
+                 (0, 0, 0), -1)
+    cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
+    
+    # Add text lines for bottom right
+    cv2.putText(frame, timestamp_text, (x_right, y_right - total_height + time_height), 
+                font, time_font_scale, (255, 255, 255), thickness)
+    
+    cv2.putText(frame, score_text, 
+                (x_right, y_right),
+                font, score_font_scale, (255, 255, 255), thickness)
+    
+    # Add tree counter to bottom left
+    tree_text = f"Trees: {tree_count}"
+    cv2.putText(frame, tree_text, (padding, height - padding), 
+                font, score_font_scale, (0, 255, 0), thickness)
+    
+    # Add age estimates if any faces detected
+    if ages:
+        age_text = "Ages: " + ", ".join(map(str, ages))
+        cv2.putText(frame, age_text, (padding, height - padding - 40), 
+                    font, time_font_scale, (255, 255, 255), thickness)
+    
+    return frame
+
+def detect_faces_and_trees(frame, face_mesh):
+    """Detect faces and trees in the frame"""
+    # Convert the BGR image to RGB
+    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    
+    # Process the frame for face detection
+    results = face_mesh.process(rgb_frame)
+    
+    # Initialize counters
+    face_count = 0
+    ages = []
+    smiling_faces = 0
+    
+    # If faces are detected
+    if results.multi_face_landmarks:
+        face_count = len(results.multi_face_landmarks)
+        
+        # Simple age estimation based on face landmarks
+        for face_landmarks in results.multi_face_landmarks:
+            # Get face height (distance between chin and forehead)
+            chin = face_landmarks.landmark[152]
+            forehead = face_landmarks.landmark[10]
+            face_height = abs(chin.y - forehead.y)
+            
+            # Very simple age estimation
+            estimated_age = int(20 + (face_height * 100))
+            ages.append(estimated_age)
+            
+            # Simple smile detection (using mouth corners)
+            left_mouth = face_landmarks.landmark[61]
+            right_mouth = face_landmarks.landmark[291]
+            mouth_width = abs(right_mouth.x - left_mouth.x)
+            
+            # If mouth is wide enough, consider it a smile
+            if mouth_width > 0.3:  # Adjust threshold as needed
+                smiling_faces += 1
+    
+    # Simple tree detection
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    lower_green = np.array([35, 50, 50])
+    upper_green = np.array([85, 255, 255])
+    mask = cv2.inRange(hsv, lower_green, upper_green)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    # Draw rectangles around trees
+    tree_count = 0
+    for contour in contours:
+        if cv2.contourArea(contour) > 1000:  # Adjust threshold as needed
+            tree_count += 1
+            x, y, w, h = cv2.boundingRect(contour)
+            # Draw green rectangle around tree
+            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+    
+    return frame, face_count, tree_count, ages, smiling_faces
+
+def generate_report(data, output_dir, file_number):
+    """Generate CSV report with c
